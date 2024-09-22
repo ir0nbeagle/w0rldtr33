@@ -1,9 +1,4 @@
-██╗    ██╗ ██████╗ ██████╗ ██╗     ██████╗ ████████╗██████╗ ██████╗ ██████╗
-  ██║    ██║██╔═████╗██╔══██╗██║     ██╔══██╗╚══██╔══╝██╔══██╗╚════██╗╚════██╗
-  ██║ █╗ ██║██║██╔██║██████╔╝██║     ██║  ██║   ██║   ██████╔╝ █████╔╝ █████╔╝
-  ██║███╗██║████╔╝██║██╔══██╗██║     ██║  ██║   ██║   ██╔══██╗ ╚═══██╗ ╚═══██╗
-  ╚███╔███╔╝╚██████╔╝██║  ██║███████╗██████╔╝   ██║   ██║  ██║██████╔╝██████╔╝
-   ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═════╝    ╚═╝   ╚═╝  ╚═╝╚═════╝ ╚═════╝
+
 
 What is this?
 This Python script is designed to analyze Indicators of Compromise (IOCs), such as IP addresses, URLs, and file hashes, by querying two threat intelligence services: VirusTotal and GreyNoise. It allows users to input IOCs either manually or from a file, then performs a detailed analysis using these external services to provide insights into the reputation and activity of the IOCs.
