@@ -5,7 +5,7 @@ import os
 
 # Load API keys from config.ini file
 config = configparser.ConfigParser()
-config.read('config.ini')
+config.read('w0rldtr33.ini')
 
 virustotal_api_key = config.get('API_KEYS', 'VIRUSTOTAL_API_KEY')
 greynoise_api_key = config.get('API_KEYS', 'GREYNOISE_API_KEY')
