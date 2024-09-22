@@ -4,8 +4,9 @@ import requests
 import argparse
 import pandas as pd
 import os
+from datetime import datetime
 
-# Load API keys from config.ini file
+# Load API keys from w0rldtr33.ini file
 config = configparser.ConfigParser()
 config.read('w0rldtr33.ini')
 
@@ -15,13 +16,13 @@ greynoise_api_key = config.get('API_KEYS', 'GREYNOISE_API_KEY')
 # Regular expressions for different types of IOCs (IP, URL, file hash)
 ip_regex = r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b"  # Matches IPv4 addresses
 url_regex = r"https?://[^\s/$.?#].[^\s]*"  # Matches HTTP/HTTPS URLs
-hash_regex = r"\b[a-fA-F0-9]{32,64}\b"  # Matches MD5 (32 characters) and SHA-1/SHA-256 (40/64 characters)
+hash_regex = r"\b[a-fA-F0-9]{32,64}\b"  # Matches MD5 (32 characters), SHA-1 (40), and SHA-256 (64)
 
 # Function to classify the type of IOC (IP, URL, File Hash, or Unknown)
 def classify_ioc(ioc):
     if re.match(ip_regex, ioc):
         return 'IP Address'
-    elif re.match(url_regex):
+    elif re.match(url_regex, ioc):
         return 'URL'
     elif re.match(hash_regex, ioc):
         return 'File Hash'
@@ -31,181 +32,189 @@ def classify_ioc(ioc):
 # Function to query VirusTotal for information about an IOC
 def virustotal_lookup(ioc, ioc_type):
     if ioc_type == 'ip-address':
-        url = f"https://www.virustotal.com/vtapi/v2/ip-address/report"
+        url = "https://www.virustotal.com/vtapi/v2/ip-address/report"
+        params = {'apikey': virustotal_api_key, 'ip': ioc}
     elif ioc_type == 'url':
-        url = f"https://www.virustotal.com/vtapi/v2/url/report"
+        url = "https://www.virustotal.com/vtapi/v2/url/report"
+        params = {'apikey': virustotal_api_key, 'resource': ioc}
     elif ioc_type == 'file':
-        url = f"https://www.virustotal.com/vtapi/v2/file/report"
+        url = "https://www.virustotal.com/vtapi/v2/file/report"
+        params = {'apikey': virustotal_api_key, 'resource': ioc}
     else:
         return {'response_code': -1, 'verbose_msg': 'Unsupported IOC type'}
     
-    params = {'apikey': virustotal_api_key, 'ip': ioc} if ioc_type == 'ip-address' else {'apikey': virustotal_api_key, 'resource': ioc}
     response = requests.get(url, params=params)
-    return response.json()
+    result = response.json()
+
+    # Handle case when VirusTotal says resource is not available
+    if result.get('response_code') == 0:
+        print(f"VirusTotal: {result.get('verbose_msg')}")
+        return None  # Return None for unscanned or unavailable resources
+
+    return result
 
 # Function to query GreyNoise for information about an IP address
 def greynoise_lookup(ip):
     url = f"https://api.greynoise.io/v3/community/{ip}"
     headers = {'key': greynoise_api_key}
     response = requests.get(url, headers=headers)
-    return response.json()
-
-# Function to analyze the list of IOCs and classify them
-def analyze_iocs(iocs):
-    results = []  
-    for ioc in iocs:
-        ioc_type = classify_ioc(ioc)
-        
-        if ioc_type == 'IP Address':
-            print(f"Analyzing IP {ioc} with GreyNoise and VirusTotal...")
-            greynoise_result = greynoise_lookup(ioc)  
-            virustotal_result = virustotal_lookup(ioc, 'ip-address')  
-            results.append({
-                'IOC': ioc, 'Type': 'IP Address',
-                'GreyNoise': greynoise_result,
-                'VirusTotal': virustotal_result
-            })
-        
-        elif ioc_type == 'URL':
-            print(f"Analyzing URL {ioc} with VirusTotal...")
-            virustotal_result = virustotal_lookup(ioc, 'url')
-            results.append({
-                'IOC': ioc, 'Type': 'URL',
-                'VirusTotal': virustotal_result
-            })
-        
-        elif ioc_type == 'File Hash':
-            print(f"Analyzing file hash {ioc} with VirusTotal...")
-            virustotal_result = virustotal_lookup(ioc, 'file')
-            results.append({
-                'IOC': ioc, 'Type': 'File Hash',
-                'VirusTotal': virustotal_result
-            })
-        
-        else:
-            print(f"Unknown IOC type for {ioc}")
-            results.append({'IOC': ioc, 'Type': 'Unknown'})
     
-    return results
+    if response.status_code == 200:
+        return response.json()
+    else:
+        print(f"Error fetching data from GreyNoise for {ip}: {response.status_code}")
+        return {}
 
-# ASCII Art Header
-def print_ascii_art():
-    print(r"""
- ██╗    ██╗ ██████╗ ██████╗ ██╗     ██████╗ ████████╗██████╗ ██████╗ ██████╗
-  ██║    ██║██╔═████╗██╔══██╗██║     ██╔══██╗╚══██╔══╝██╔══██╗╚════██╗╚════██╗
-  ██║ █╗ ██║██║██╔██║██████╔╝██║     ██║  ██║   ██║   ██████╔╝ █████╔╝ █████╔╝
-  ██║███╗██║████╔╝██║██╔══██╗██║     ██║  ██║   ██║   ██╔══██╗ ╚═══██╗ ╚═══██╗
-  ╚███╔███╔╝╚██████╔╝██║  ██║███████╗██████╔╝   ██║   ██║  ██║██████╔╝██████╔╝
-   ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═════╝    ╚═╝   ╚═╝  ╚═╝╚═════╝ ╚═════╝
-    """)
+# Function to analyze a single IOC and return the result
+def analyze_ioc(ioc):
+    ioc_type = classify_ioc(ioc)
+    
+    if ioc_type == 'IP Address':
+        print(f"Analyzing IP {ioc} with GreyNoise and VirusTotal...")
+        greynoise_result = greynoise_lookup(ioc)
+        virustotal_result = virustotal_lookup(ioc, 'ip-address')
+        return {
+            'IOC': ioc, 'Type': 'IP Address',
+            'GreyNoise': greynoise_result,
+            'VirusTotal': virustotal_result
+        }
+    
+    elif ioc_type == 'URL':
+        print(f"Analyzing URL {ioc} with VirusTotal...")
+        virustotal_result = virustotal_lookup(ioc, 'url')
+        return {
+            'IOC': ioc, 'Type': 'URL',
+            'VirusTotal': virustotal_result
+        }
+    
+    elif ioc_type == 'File Hash':
+        print(f"Analyzing file hash {ioc} with VirusTotal...")
+        virustotal_result = virustotal_lookup(ioc, 'file')
+        
+        # Handle case where hash has not been scanned
+        if virustotal_result is None:
+            return {
+                'IOC': ioc,
+                'Type': 'File Hash',
+                'VirusTotal': {'verbose_msg': 'Not found in VirusTotal database'}
+            }
+        
+        return {
+            'IOC': ioc, 'Type': 'File Hash',
+            'VirusTotal': virustotal_result
+        }
+    
+    else:
+        print(f"Unknown IOC type for {ioc}")
+        return {'IOC': ioc, 'Type': 'Unknown'}
 
 # Function to print analysis results in a readable format
-def print_results(results):
-    print_ascii_art()
-    print("\nAnalysis Results:\n" + "="*80)
+def print_results(result):
+    if result is None:
+        print("No valid data to display for this IOC.")
+        return
+
+    ioc = result['IOC']
+    ioc_type = result['Type']
+    print("\n" + "="*80)
+    print(f"\nIOC: {ioc}")
+    print(f"Type: {ioc_type}")
     
-    for result in results:
-        ioc = result['IOC']
-        ioc_type = result['Type']
-        print("\n" + "="*80)
-        print(f"\nIOC: {ioc}")
-        print(f"Type: {ioc_type}")
+    if ioc_type == 'IP Address':
+        print("\n--- GreyNoise Information ---")
+        greynoise_data = result.get('GreyNoise', {})
         
-        if ioc_type == 'IP Address':
-            print("\n--- GreyNoise Information ---")
-            greynoise_data = result['GreyNoise']
-            print(f"IP: {greynoise_data.get('ip')}")
-            print(f"Noise: {greynoise_data.get('noise')}")
-            print(f"RIOT: {greynoise_data.get('riot')}")
-            print(f"Classification: {greynoise_data.get('classification')}")
-            print(f"Name: {greynoise_data.get('name')}")
-            
-            tags = greynoise_data.get('tags', [])
-            if tags:
-                print(f"Tags: {', '.join(tags)}")
-            else:
-                print(f"Tags: None")
-            
-            metadata = greynoise_data.get('metadata', {})
-            print(f"Country: {metadata.get('country', 'Unknown')}")
-            print(f"Organization: {metadata.get('organization', 'Unknown')}")
-            print(f"ASN: {metadata.get('asn', 'Unknown')}")
-            print(f"GreyNoise Link: {greynoise_data.get('link')}")
-            print(f"Last Seen: {greynoise_data.get('last_seen')}")
-            
-            print("\n--- VirusTotal Information ---")
-            vt_data = result['VirusTotal']
-            print(f"Response Code: {vt_data.get('response_code')}")
-            print(f"Verbose Message: {vt_data.get('verbose_msg')}")
-            
-            if 'detected_urls' in vt_data:
-                print(f"Detected URLs: {len(vt_data['detected_urls'])}")
-                for url_info in vt_data['detected_urls'][:3]:
-                    print(f"URL: {url_info['url']}, Positives: {url_info['positives']}/{url_info['total']}")
-            
-            if 'detected_downloaded_samples' in vt_data:
-                print(f"Detected Downloaded Samples: {len(vt_data['detected_downloaded_samples'])}")
-                for sample in vt_data['detected_downloaded_samples'][:3]:
-                    print(f"Sample Hash: {sample['sha256']}, Positives: {sample['positives']}/{sample['total']}")
+        # Ensure fields are present and handle default None values
+        ip = greynoise_data.get('ip', 'None')
+        noise = greynoise_data.get('noise', 'None')
+        riot = greynoise_data.get('riot', 'None')
+        classification = greynoise_data.get('classification', 'None')
+        name = greynoise_data.get('name', 'None')
+        last_seen = greynoise_data.get('last_seen', 'None')
+        greynoise_link = f"https://viz.greynoise.io/ip/{ioc}" if ip != 'None' else 'None'
+
+        print(f"IP: {ip}")
+        print(f"Noise: {noise}")
+        print(f"RIOT: {riot}")
+        print(f"Classification: {classification}")
+        print(f"Name: {name}")
+        print(f"GreyNoise Link: {greynoise_link}")
+        print(f"Last Seen: {last_seen}")
         
-        elif ioc_type == 'URL' or ioc_type == 'File Hash':
-            print("\n--- VirusTotal Information ---")
-            vt_data = result['VirusTotal']
-            print(f"Response Code: {vt_data.get('response_code')}")
-            print(f"Verbose Message: {vt_data.get('verbose_msg')}")
+        print("\n--- VirusTotal Information ---")
+        vt_data = result['VirusTotal']
+        print(f"Response Code: {vt_data.get('response_code', 'None')}")
+        print(f"Verbose Message: {vt_data.get('verbose_msg', 'None')}")
         
-        elif ioc_type == 'Unknown':
-            print("\nThis IOC could not be classified.")
+        if 'detected_urls' in vt_data:
+            print(f"Detected URLs: {len(vt_data['detected_urls'])}")
+            for url_info in vt_data['detected_urls'][:3]:
+                print(f"URL: {url_info['url']}, Positives: {url_info['positives']}/{url_info['total']}")
+        
+        if 'detected_downloaded_samples' in vt_data:
+            print(f"Detected Downloaded Samples: {len(vt_data['detected_downloaded_samples'])}")
+            for sample in vt_data['detected_downloaded_samples'][:3]:
+                print(f"Sample Hash: {sample['sha256']}, Positives: {sample['positives']}/{sample['total']}")
+    
+    elif ioc_type == 'File Hash':
+        print("\n--- VirusTotal Information ---")
+        vt_data = result['VirusTotal']
+        print(f"Response Code: {vt_data.get('response_code', 'None')}")
+        print(f"Verbose Message: {vt_data.get('verbose_msg', 'None')}")
+        
+        if vt_data.get('response_code') == 0:
+            print(f"Hash {ioc} is not yet scanned.")
+        else:
+            print(f"Detection Ratio: {vt_data.get('positives', 'None')}/{vt_data.get('total', 'None')}")
+            print(f"Scan Date: {vt_data.get('scan_date', 'None')}")
+    
+    elif ioc_type == 'URL':
+        print("\n--- VirusTotal Information ---")
+        vt_data = result['VirusTotal']
+        print(f"Response Code: {vt_data.get('response_code', 'None')}")
+        print(f"Verbose Message: {vt_data.get('verbose_msg', 'None')}")
+    
+    elif ioc_type == 'Unknown':
+        print("\nThis IOC could not be classified.")
     
     print("\n" + "="*80)
 
-# Function to determine if IOC is malicious based on VirusTotal and GreyNoise
-def is_malicious(greynoise_data, vt_data):
-    # GreyNoise: If classification is malicious
-    greynoise_malicious = greynoise_data.get('classification') == 'malicious'
-    
-    # VirusTotal: If VirusTotal reports detections
-    vt_malicious = vt_data.get('response_code') == 1 and ('detected_urls' in vt_data or 'detected_downloaded_samples' in vt_data)
-    
-    return greynoise_malicious or vt_malicious
-
 # Function to save the results to a CSV file for historical tracking
-def save_results_to_csv(results, filename="historical_searches.csv"):
-    records = []
-    for result in results:
-        ioc = result['IOC']
-        ioc_type = result['Type']
-        greynoise_data = result.get('GreyNoise', {})
-        vt_data = result.get('VirusTotal', {})
-        
-        # Determine if the IOC is malicious
-        malicious = is_malicious(greynoise_data, vt_data)
-        
-        # Extract relevant data for CSV
-        record = {
-            'IOC': ioc,
-            'Type': ioc_type,
-            'GreyNoise_Noise': greynoise_data.get('noise'),
-            'GreyNoise_RIOT': greynoise_data.get('riot'),
-            'GreyNoise_Classification': greynoise_data.get('classification'),
-            'VirusTotal_Response': vt_data.get('verbose_msg'),
-            'Malicious': malicious  # Common column for malicious
-        }
-        records.append(record)
+def save_results_to_csv(result, filename="historical_searches.csv"):
+    ioc = result['IOC']
+    ioc_type = result['Type']
+    greynoise_data = result.get('GreyNoise', {})
+    vt_data = result.get('VirusTotal', {})
     
-    df = pd.DataFrame(records)
+    # If it's a file hash, extract the detection ratio from VirusTotal
+    vt_response = vt_data.get('verbose_msg', 'None')
+    if ioc_type == 'File Hash' and vt_data.get('response_code') != 0:
+        vt_response = f"Detection Ratio: {vt_data.get('positives', 'None')}/{vt_data.get('total', 'None')}"
     
-    # If the file already exists, append without writing the header again
+    # Add the scan date
+    scan_date = datetime.now().strftime('%Y-%m-%d')
+    
+    # Prepare the record
+    record = {
+        'IOC': ioc,
+        'Type': ioc_type,
+        'GreyNoise_Noise': greynoise_data.get('noise', 'None'),
+        'GreyNoise_RIOT': greynoise_data.get('riot', 'None'),
+        'GreyNoise_Classification': greynoise_data.get('classification', 'None'),
+        'VirusTotal_Response': vt_response,  # Store detection ratio if available
+        'Scan Date': scan_date  # Add scan date to the CSV
+    }
+    
+    # Check if the record already exists in the CSV
     if os.path.exists(filename):
-        df.to_csv(filename, mode='a', header=False, index=False)
+        existing_data = pd.read_csv(filename)
+        # Avoid duplicates by checking if the IOC already exists in the file
+        if not ((existing_data['IOC'] == ioc) & (existing_data['Type'] == ioc_type)).any():
+            df = pd.DataFrame([record])
+            df.to_csv(filename, mode='a', header=False, index=False)
     else:
+        df = pd.DataFrame([record])
         df.to_csv(filename, index=False)
-
-# Function to load IOCs from a text file (ignoring lines starting with "#")
-def get_iocs_from_file(file_path):
-    with open(file_path, 'r') as file:
-        iocs = [line.strip() for line in file if not line.startswith("#") and line.strip()]
-    return iocs
 
 # Main function with argparse to handle command line switches
 def main():
@@ -216,30 +225,26 @@ def main():
     args = parser.parse_args()
     
     if args.command:
-        iocs = []
-        print_ascii_art()
-        print("Enter IOCs one by one. Type 'done' when finished:")
-        while True:
-            ioc = input("> ").strip()
-            if ioc.lower() == 'done':
-                break
-            iocs.append(ioc)
-        
+        try:
+            while True:
+                ioc = input("Enter IOC to analyze (Ctrl+C to exit): ").strip()
+                if ioc:
+                    result = analyze_ioc(ioc)
+                    print_results(result)
+                    save_results_to_csv(result)
+        except KeyboardInterrupt:
+            print("\nExiting...")
+    
     elif args.list:
         file_path = args.list
-        iocs = get_iocs_from_file(file_path)
-        print_ascii_art()
-    
+        with open(file_path, 'r') as file:
+            iocs = [line.strip() for line in file if not line.startswith("#") and line.strip()]
+        for ioc in iocs:
+            result = analyze_ioc(ioc)
+            print_results(result)
+            save_results_to_csv(result)
     else:
         print("Please specify either '-c' for manual input or '-l' for a list of IOCs.")
-        return
-
-    # Analyze and print results
-    results = analyze_iocs(iocs)
-    print_results(results)
-
-    # Save results to CSV
-    save_results_to_csv(results)
 
 if __name__ == "__main__":
     main()
