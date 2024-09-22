@@ -1,6 +1,8 @@
 import configparser
 import re
 import requests
+import argparse
+import pandas as pd
 import os
 
 # Load API keys from config.ini file
@@ -19,7 +21,7 @@ hash_regex = r"\b[a-fA-F0-9]{32,64}\b"  # Matches MD5 (32 characters) and SHA-1/
 def classify_ioc(ioc):
     if re.match(ip_regex, ioc):
         return 'IP Address'
-    elif re.match(url_regex, ioc):
+    elif re.match(url_regex):
         return 'URL'
     elif re.match(hash_regex, ioc):
         return 'File Hash'
@@ -157,35 +159,87 @@ def print_results(results):
     
     print("\n" + "="*80)
 
-# Function to load IOCs from a text file
+# Function to determine if IOC is malicious based on VirusTotal and GreyNoise
+def is_malicious(greynoise_data, vt_data):
+    # GreyNoise: If classification is malicious
+    greynoise_malicious = greynoise_data.get('classification') == 'malicious'
+    
+    # VirusTotal: If VirusTotal reports detections
+    vt_malicious = vt_data.get('response_code') == 1 and ('detected_urls' in vt_data or 'detected_downloaded_samples' in vt_data)
+    
+    return greynoise_malicious or vt_malicious
+
+# Function to save the results to a CSV file for historical tracking
+def save_results_to_csv(results, filename="historical_searches.csv"):
+    records = []
+    for result in results:
+        ioc = result['IOC']
+        ioc_type = result['Type']
+        greynoise_data = result.get('GreyNoise', {})
+        vt_data = result.get('VirusTotal', {})
+        
+        # Determine if the IOC is malicious
+        malicious = is_malicious(greynoise_data, vt_data)
+        
+        # Extract relevant data for CSV
+        record = {
+            'IOC': ioc,
+            'Type': ioc_type,
+            'GreyNoise_Noise': greynoise_data.get('noise'),
+            'GreyNoise_RIOT': greynoise_data.get('riot'),
+            'GreyNoise_Classification': greynoise_data.get('classification'),
+            'VirusTotal_Response': vt_data.get('verbose_msg'),
+            'Malicious': malicious  # Common column for malicious
+        }
+        records.append(record)
+    
+    df = pd.DataFrame(records)
+    
+    # If the file already exists, append without writing the header again
+    if os.path.exists(filename):
+        df.to_csv(filename, mode='a', header=False, index=False)
+    else:
+        df.to_csv(filename, index=False)
+
+# Function to load IOCs from a text file (ignoring lines starting with "#")
 def get_iocs_from_file(file_path):
     with open(file_path, 'r') as file:
-        iocs = [line.strip() for line in file.readlines()]  # Strip leading/trailing spaces
+        iocs = [line.strip() for line in file if not line.startswith("#") and line.strip()]
     return iocs
 
-# Main function to run the IOC analysis process
+# Main function with argparse to handle command line switches
 def main():
-    choice = input("Do you want to enter IOCs manually or from a file? (manual/file): ").strip().lower()
-
-    if choice == 'manual':
+    parser = argparse.ArgumentParser(description="IOC Analysis Script")
+    parser.add_argument('-c', '--command', action='store_true', help="Manually enter IOCs")
+    parser.add_argument('-l', '--list', type=str, help="Run analysis on IOCs from a text file")
+    
+    args = parser.parse_args()
+    
+    if args.command:
         iocs = []
+        print_ascii_art()
         print("Enter IOCs one by one. Type 'done' when finished:")
         while True:
             ioc = input("> ").strip()
             if ioc.lower() == 'done':
                 break
             iocs.append(ioc)
-    
-    elif choice == 'file':
-        file_path = input("Enter the file path: ").strip()
+        
+    elif args.list:
+        file_path = args.list
         iocs = get_iocs_from_file(file_path)
+        print_ascii_art()
     
     else:
-        print("Invalid choice.")
+        print("Please specify either '-c' for manual input or '-l' for a list of IOCs.")
         return
 
+    # Analyze and print results
     results = analyze_iocs(iocs)
     print_results(results)
+
+    # Save results to CSV
+    save_results_to_csv(results)
 
 if __name__ == "__main__":
     main()
